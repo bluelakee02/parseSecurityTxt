@@ -4,20 +4,23 @@ import { AbortSignal } from 'node-fetch/externals';
 import { TextDecoder } from 'util';
 
 const SECURITY_TXT_SIZE_LIMIT = 1024;
+const LINKS_SIZE_LIMIT = 1024 * 1024;
 const TIMEOUT_LIMIT = 10000;
 
+const languageNames = new Intl.DisplayNames(['en'], { type: 'language' });
+
 export type SecurityTxtDocument = {
-  contact: Array<string | URL>;
+  contact: Array<string>;
   expires: string | Date | undefined;
-  encryption?: Array<string | URL>;
-  acknowledgments?: Array<string | URL>;
+  encryption?: Array<string>;
+  acknowledgments?: Array<string>;
   preferredLanguages?: Array<string>;
-  canonical?: string | URL;
-  policy?: Array<string | URL>;
-  hiring?: Array<string | URL>;
+  canonical?: string;
+  policy?: Array<string>;
+  hiring?: Array<string>;
 };
 
-export type SecurityTxtParsedDocument = Array<{ label: string; value?: string; link?: string }>;
+export type SecurityTxtParsedDocument = Array<{ label: string; value?: string | Date; link?: string }>;
 
 const stringIsAValidUrl = (s: string) => {
   try {
@@ -50,12 +53,68 @@ const parseTitle = (body: string) => {
 };
 
 const getPageTitle = async (url: string) => {
-  const response = await fetch(url, { method: 'GET', size: SECURITY_TXT_SIZE_LIMIT, timeout: TIMEOUT_LIMIT });
+  const response = await fetch(url, { method: 'GET', size: LINKS_SIZE_LIMIT, timeout: TIMEOUT_LIMIT });
   return parseTitle(await response.text());
 };
 
-const parseSecurityTxtDocument = (document: SecurityTxtDocument) => {
+const parseSecurityTxtDocument = async (document: SecurityTxtDocument) => {
   const result: SecurityTxtParsedDocument = [];
+
+  //Get all possible contacts
+  for (const contact of document.contact) {
+    if (isAMailToLink(contact) || isAPhoneLink(contact)) {
+      result.push({ label: 'contact', value: contact });
+    }
+    if (stringIsAValidUrl(contact) && urlExists(contact)) {
+      result.push({ label: await getPageTitle(contact), link: contact });
+    }
+  }
+
+  result.push({ label: 'expires', value: document.expires });
+
+  if (document.encryption) {
+    for (const encryption of document.encryption) {
+      result.push({ label: 'encryption', value: encryption });
+    }
+  }
+
+  if (document.acknowledgments) {
+    for (const acknowledgement of document.acknowledgments) {
+      if (stringIsAValidUrl(acknowledgement) && urlExists(acknowledgement)) {
+        result.push({ label: await getPageTitle(acknowledgement), link: acknowledgement });
+      }
+    }
+  }
+
+  if (document.preferredLanguages) {
+    let languages = [];
+    for (const language of document.preferredLanguages) {
+      languages.push(languageNames.of(language));
+    }
+    result.push({ label: 'preferredLanguages', value: languages.join(', ') });
+  }
+
+  if (document.canonical) {
+    result.push({ label: 'canonical', link: document.canonical });
+  }
+
+  if (document.policy) {
+    for (const policy of document.policy) {
+      if (stringIsAValidUrl(policy) && urlExists(policy)) {
+        result.push({ label: await getPageTitle(policy), link: policy });
+      }
+    }
+  }
+
+  if (document.hiring) {
+    for (const hiring of document.hiring) {
+      if (stringIsAValidUrl(hiring) && urlExists(hiring)) {
+        result.push({ label: await getPageTitle(hiring), link: hiring });
+      }
+    }
+  }
+
+  return result;
 };
 
 const parseLinesToObject = (lines: string[]) => {
@@ -129,7 +188,12 @@ const parseSecurityTxt = async (link: string) => {
     return;
   }
 
-  const response = await fetch(link, { method: 'GET', signal: controller.signal as AbortSignal, size: SECURITY_TXT_SIZE_LIMIT, timeout: TIMEOUT_LIMIT });
+  const response = await fetch(link, {
+    method: 'GET',
+    signal: controller.signal as AbortSignal,
+    size: SECURITY_TXT_SIZE_LIMIT,
+    timeout: TIMEOUT_LIMIT,
+  });
 
   if (!response.headers.get('content-type')?.includes('text/plain')) {
     return;
@@ -150,15 +214,15 @@ const parseSecurityTxt = async (link: string) => {
 
   responseText += decoder.decode();
   let lines = responseText.match(/[^\r\n]+/g) || [];
-  console.log(lines);
   const parsedLines = parseLinesToObject(lines);
-  console.log(parsedLines);
+  const parsedSecurityTxtDocument = await parseSecurityTxtDocument(parsedLines);
+  console.log(parsedSecurityTxtDocument);
+  return parseSecurityTxtDocument;
 };
 
-// parseSecurityTxt('aaa');
+parseSecurityTxt('aaa');
 
-// parseSecurityTxt('https://githaaaub.com/.well-known/security.txta');
+parseSecurityTxt('https://githaaaub.com/.well-known/security.txta');
 parseSecurityTxt('https://github.com/.well-known/security.txt');
-// parseSecurityTxt('http://www.unforgettable.dk/42.zip');
-// parseSecurityTxt('https://github.com/bluelakee02/test/raw/main/a.txt'); //actually a picture
-console.log(getPageTitle('https://github.com/'));
+parseSecurityTxt('http://www.unforgettable.dk/42.zip');
+parseSecurityTxt('https://github.com/bluelakee02/test/raw/main/a.txt'); //actually a picture
